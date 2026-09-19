@@ -85,8 +85,17 @@ def _reset(repo: str):
     )
 
 
-def _run(repo: str, test_cmd: str):
-    _reset(repo)
+def _read_text(rel_path: str) -> str:
+    return (ROOT / rel_path).read_text(encoding="utf-8", errors="replace")
+
+
+def _write_text(rel_path: str, content: str):
+    (ROOT / rel_path).write_text(content, encoding="utf-8")
+
+
+def _run(repo: str, test_cmd: str, reset: bool = True):
+    if reset:
+        _reset(repo)
     llm = LLMClient()
     env = {"repo_path": str(ROOT / repo)}
     return run_agent(llm, env, {"test_command": test_cmd})
@@ -215,48 +224,93 @@ with tab_paste:
 
 # ---------- 单个修复演示 ----------
 with tab_demo:
-    st.markdown("**让 agent 自己修好 `benchmark/demo` 里的 bug。**")
-    st.markdown("测试期望 `divide(1, 0)` 返回 `None`，但当前代码会抛 `ZeroDivisionError`。点按钮，看它一步步定位并修复。")
-    if st.button("🚀 运行修复", type="primary"):
-        try:
-            out = _run("benchmark/demo", "pytest test_calc.py -q")
-            _render_trace(out)
-            before = subprocess.run(
-                "git show HEAD:benchmark/demo/calc.py", shell=True, cwd=ROOT,
-                capture_output=True, text=True, encoding="utf-8", errors="replace",
-            ).stdout
-            after = (ROOT / "benchmark" / "demo" / "calc.py").read_text(encoding="utf-8")
-            _render_before_after(before, after)
-            _render_tokens(out["tokens"])
-        except Exception as e:
-            st.error(f"运行出错：{e}")
+    st.markdown("**下面是 agent 要修复的仓库，代码可直接修改——改完就是你的 bug。**")
+    st.caption("点「运行修复」后，agent 会读这个文件、改代码、跑测试，下面的决策日志会一步步展示它做了什么。")
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown("**`calc.py`**")
+        calc_val = st.text_area("calc.py", value=_read_text("benchmark/demo/calc.py"), height=160, label_visibility="collapsed")
+    with c2:
+        st.markdown("**`test_calc.py`**")
+        test_val = st.text_area("test_calc.py", value=_read_text("benchmark/demo/test_calc.py"), height=160, label_visibility="collapsed")
+
+    col_reset, col_run = st.columns([1, 2])
+    with col_reset:
+        if st.button("🔄 重置为初始 bug"):
+            _reset("benchmark/demo")
+            st.rerun()
+    with col_run:
+        if st.button("🚀 运行修复", type="primary"):
+            _write_text("benchmark/demo/calc.py", calc_val)
+            _write_text("benchmark/demo/test_calc.py", test_val)
+            try:
+                with st.spinner("agent 正在读代码、改 bug、跑测试..."):
+                    out = _run("benchmark/demo", "pytest test_calc.py -q", reset=False)
+                _render_trace(out)
+                _render_before_after(calc_val, _read_text("benchmark/demo/calc.py"))
+                _render_tokens(out["tokens"])
+            except Exception as e:
+                st.error(f"运行出错：{e}")
 
 # ---------- 一键评测 ----------
 with tab_eval:
-    st.markdown("**批量跑几个小 bug，看 agent 的修复成功率。**")
-    st.markdown("这只是**快速演示**（3 个手写小 bug），不是严谨评测。真正的评测请用 `scripts/mine_bugs.py` 挖真实 bug + `scripts/evaluate.py`。")
-    instances = [
-        {"id": "字符串反转", "repo": "benchmark/demo-benchmark/reverse", "test": "pytest test_mylib.py -q"},
-        {"id": "空列表求平均", "repo": "benchmark/demo-benchmark/average", "test": "pytest test_mylib.py -q"},
-        {"id": "大写元音计数", "repo": "benchmark/demo-benchmark/vowels", "test": "pytest test_mylib.py -q"},
+    st.markdown("**下面是几个小 bug，代码可直接修改，也能在底部添加你自己的 bug。**")
+    st.caption("这只是**快速演示**（手写小 bug），不是严谨评测。真正的评测用 `scripts/mine_bugs.py` + `scripts/evaluate.py`。")
+
+    base_bugs = [
+        {"id": "字符串反转", "repo": "benchmark/demo-benchmark/reverse"},
+        {"id": "空列表求平均", "repo": "benchmark/demo-benchmark/average"},
+        {"id": "大写元音计数", "repo": "benchmark/demo-benchmark/vowels"},
     ]
+    extra_bugs = st.session_state.get("extra_bugs", [])
+    bugs = base_bugs + extra_bugs
+
+    edits = {}
+    for b in bugs:
+        with st.expander(f"🐛 {b['id']}", expanded=False):
+            cc1, cc2 = st.columns(2)
+            with cc1:
+                st.markdown("**`mylib.py`**")
+                code = st.text_area("代码", value=_read_text(f"{b['repo']}/mylib.py"), key=f"{b['repo']}_code", height=110, label_visibility="collapsed")
+            with cc2:
+                st.markdown("**`test_mylib.py`**")
+                test = st.text_area("测试", value=_read_text(f"{b['repo']}/test_mylib.py"), key=f"{b['repo']}_test", height=110, label_visibility="collapsed")
+            edits[b["repo"]] = (code, test)
+
     if st.button("📊 开始演示", type="primary"):
         results = []
         total_tokens = {"prompt": 0, "completion": 0, "total": 0}
-        progress = st.progress(0, text="评测中...")
-        for i, inst in enumerate(instances):
-            st.markdown(f"**正在评测：{inst['id']}**")
+        progress = st.progress(0, text="运行中...")
+        for i, b in enumerate(bugs):
+            code, test = edits[b["repo"]]
+            _write_text(f"{b['repo']}/mylib.py", code)
+            _write_text(f"{b['repo']}/test_mylib.py", test)
             try:
-                out = _run(inst["repo"], inst["test"])
-                results.append({"任务": inst["id"], "结果": "✅ 修复" if out["success"] else "❌ 未修复", "步数": out["steps"]})
+                out = _run(b["repo"], "pytest test_mylib.py -q", reset=False)
+                results.append({"任务": b["id"], "结果": "✅ 修复" if out["success"] else "❌ 未修复", "步数": out["steps"]})
                 for k in total_tokens:
                     total_tokens[k] += out["tokens"].get(k, 0)
             except Exception as e:
-                results.append({"任务": inst["id"], "结果": "❌ 异常", "步数": "-"})
-            progress.progress((i + 1) / len(instances), text=f"已完成 {i + 1}/{len(instances)}")
+                results.append({"任务": b["id"], "结果": "❌ 异常", "步数": "-"})
+            progress.progress((i + 1) / len(bugs), text=f"已完成 {i + 1}/{len(bugs)}")
 
         st.table(results)
         resolved = sum(1 for r in results if "✅" in r["结果"])
-        total = len(results)
-        st.metric("修复成功率", f"{resolved}/{total} = {resolved / total * 100:.0f}%")
+        st.metric("修复成功率", f"{resolved}/{len(bugs)} = {resolved / len(bugs) * 100:.0f}%")
         _render_tokens(total_tokens)
+
+    with st.expander("➕ 添加你自己的 bug"):
+        new_name = st.text_input("bug 名称", placeholder="例如：列表去重")
+        new_code = st.text_area("代码 `mylib.py`", height=110, placeholder="def dedup(xs):\n    return xs")
+        new_test = st.text_area("测试 `test_mylib.py`", height=90, placeholder="from mylib import dedup\n\n\ndef test_dedup():\n    assert dedup([1, 1, 2]) == [1, 2]")
+        if st.button("➕ 添加"):
+            if not (new_name.strip() and new_code.strip() and new_test.strip()):
+                st.warning("名称、代码、测试都要填。")
+            else:
+                repo = f"benchmark/demo-benchmark/{new_name.strip()}"
+                (ROOT / repo).mkdir(parents=True, exist_ok=True)
+                _write_text(f"{repo}/mylib.py", new_code)
+                _write_text(f"{repo}/test_mylib.py", new_test)
+                st.session_state.setdefault("extra_bugs", []).append({"id": new_name.strip(), "repo": repo})
+                st.success(f"已添加 bug：{new_name.strip()}")
+                st.rerun()
