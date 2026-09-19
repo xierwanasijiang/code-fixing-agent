@@ -10,7 +10,6 @@ import sys
 
 from code_agent.llm import LLMClient
 from code_agent.loop import run_agent
-import code_agent.loop as loop_mod
 import code_agent.tools as tools_mod
 
 
@@ -20,8 +19,10 @@ def main():
     max_steps = int(val) if var == "max_steps" else 15
 
     if var == "no_search":
-        tools_mod.TOOL_SCHEMAS = [t for t in tools_mod.TOOL_SCHEMAS
-                                  if t["function"]["name"] != "search_code"]
+        # 原地切片赋值，保证 loop.py 里 from .tools import TOOL_SCHEMAS 绑定的
+        # 同一个 list 对象被原地修改，消融才真正生效。
+        tools_mod.TOOL_SCHEMAS[:] = [t for t in tools_mod.TOOL_SCHEMAS
+                                     if t["function"]["name"] != "search_code"]
 
     # 复用 evaluate.py 的逻辑（简单起见，这里只跑第一个实例示意）
     import json

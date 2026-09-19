@@ -19,8 +19,17 @@ def run(cmd, cwd):
 
 def changed_test_files(commit, cwd):
     out = run(f"git show --name-only --oneline {commit}", cwd)
-    return [l for l in out.stdout.splitlines()
-            if l.startswith("test") and l.endswith(".py")]
+    tests = []
+    for line in out.stdout.splitlines():
+        if not line.endswith(".py"):
+            continue
+        base = line.rsplit("/", 1)[-1]
+        if (base.startswith("test_")
+                or base.endswith("_test.py")
+                or "/test" in line
+                or "test/" in line):
+            tests.append(line)
+    return tests
 
 
 def tests_to_ids(test_file, cwd):
