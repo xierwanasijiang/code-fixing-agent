@@ -79,3 +79,27 @@ def test_loop_survives_tool_exception(tmp_path, monkeypatch):
     assert out["success"] is True
     tool_messages = [m for m in out["messages"] if m["role"] == "tool"]
     assert any("工具执行出错" in m["content"] for m in tool_messages)
+
+
+def test_loop_collects_trace(tmp_path):
+    """run_agent 应收集逐步 trace，供 UI 可视化展示。"""
+    (tmp_path / "m.py").write_text("def f():\n    return 1\n")
+    (tmp_path / "test_m.py").write_text(
+        "from m import f\n\n\ndef test_f():\n    assert f() == 2\n"
+    )
+    llm = FakeLLM([
+        _resp_tool("read_file", {"path": "m.py"}),
+        _resp_tool("edit_file", {"path": "m.py", "old": "return 1", "new": "return 2"}),
+        _resp_tool("run_test", {"test_cmd": "pytest test_m.py -q"}),
+        _resp_text("已修复"),
+    ])
+    out = run_agent(llm, {"repo_path": str(tmp_path)},
+                    {"test_command": "pytest test_m.py -q"})
+    tool_steps = [t for t in out["trace"] if t["type"] == "tool"]
+    final_steps = [t for t in out["trace"] if t["type"] == "final"]
+    assert len(tool_steps) == 3
+    assert tool_steps[0]["name"] == "read_file"
+    assert tool_steps[1]["name"] == "edit_file"
+    assert tool_steps[2]["name"] == "run_test"
+    assert len(final_steps) == 1
+    assert final_steps[0]["success"] is True
