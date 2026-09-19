@@ -23,13 +23,11 @@ st.set_page_config(page_title="代码修复 Agent", page_icon="🤖", layout="wi
 with st.sidebar:
     st.markdown("### 🔑 模型 API Key")
     st.markdown("填入**你自己的** DeepSeek API Key（只存当前会话，不保存、不上传）。")
-    api_key_input = st.text_input(
-        "DeepSeek API Key", type="password", placeholder="sk-...",
-        value=st.session_state.get("api_key", ""),
+    st.text_input(
+        "DeepSeek API Key", type="password", placeholder="sk-...", key="api_key",
     )
-    if api_key_input.strip():
-        st.session_state["api_key"] = api_key_input.strip()
-    if st.session_state.get("api_key", "").strip() or os.environ.get("DEEPSEEK_API_KEY"):
+    has_key = bool((st.session_state.get("api_key") or "").strip()) or bool(os.environ.get("DEEPSEEK_API_KEY"))
+    if has_key:
         st.success("✅ 已就绪，可以运行。")
     else:
         st.warning("⚠️ 尚未设置 API Key。\n\n去 [platform.deepseek.com](https://platform.deepseek.com) 免费申请一个，粘贴到上方输入框。")
