@@ -25,7 +25,10 @@ def run_agent(llm, env, instance, max_steps=15):
         # 按 OpenAI 工具调用协议回传：assistant.tool_calls + role:"tool"
         ctx.add_assistant_tool_call(parsed["tool_calls"])
         for tc in parsed["tool_calls"]:
-            result = execute_tool(tc["name"], tc["arguments"], env)
+            try:
+                result = execute_tool(tc["name"], tc["arguments"], env)
+            except Exception as e:
+                result = f"工具执行出错：{e}"
             ctx.add_tool_result(tc["id"], result)
 
     return {"success": False, "steps": steps,

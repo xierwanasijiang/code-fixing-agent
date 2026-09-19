@@ -3,14 +3,24 @@ import re
 import subprocess
 from pathlib import Path
 
-from .sandbox import subprocess_env
+from .sandbox import parse_test_cmd, pytest_argv, subprocess_env
 
 MAX_READ_CHARS = 8000
 _EXCLUDED_DIRS = {".git", "__pycache__", ".venv", "venv", ".pytest_cache"}
 
 
+def _safe_path(repo_path, path):
+    base = Path(repo_path).resolve()
+    target = (base / path).resolve()
+    if not target.is_relative_to(base):
+        return None
+    return target
+
+
 def _read_file(repo_path, path, start=None, end=None):
-    p = Path(repo_path) / path
+    p = _safe_path(repo_path, path)
+    if p is None:
+        return "错误：路径越界"
     text = p.read_text(encoding="utf-8", errors="replace")
     lines = text.splitlines()
     if start is not None or end is not None:
@@ -22,7 +32,9 @@ def _read_file(repo_path, path, start=None, end=None):
 
 
 def _list_files(repo_path, path="."):
-    p = Path(repo_path) / path
+    p = _safe_path(repo_path, path)
+    if p is None:
+        return "错误：路径越界"
     entries = []
     for f in sorted(p.rglob("*")):
         if any(part in _EXCLUDED_DIRS for part in f.parts):
@@ -60,7 +72,9 @@ def _search_code(repo_path, pattern):
 
 
 def _edit_file(repo_path, path, old, new):
-    p = Path(repo_path) / path
+    p = _safe_path(repo_path, path)
+    if p is None:
+        return "错误：路径越界"
     text = p.read_text(encoding="utf-8", errors="replace")
     if old not in text:
         return f"错误：文件中找不到要替换的内容：{old[:100]!r}"
@@ -69,10 +83,15 @@ def _edit_file(repo_path, path, old, new):
 
 
 def _run_test(repo_path, test_cmd, timeout=60):
+    parts = parse_test_cmd(test_cmd)
+    if parts is None:
+        return "错误：只允许运行 pytest 测试命令"
+    cmd = pytest_argv(parts)
     try:
         r = subprocess.run(
-            test_cmd, shell=True, cwd=repo_path,
+            cmd, cwd=repo_path,
             capture_output=True, text=True, timeout=timeout,
+            encoding="utf-8", errors="replace",
             env=subprocess_env(),
         )
         out = f"returncode={r.returncode}\n{r.stdout[-4000:]}"

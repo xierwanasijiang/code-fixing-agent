@@ -23,9 +23,17 @@ def main():
         # 切到 bug 状态
         import subprocess
         subprocess.run(f"git checkout {inst['bug_commit']}", shell=True,
-                       cwd=repo_path, capture_output=True, text=True)
+                       cwd=repo_path, capture_output=True, text=True,
+                       encoding="utf-8", errors="replace")
         env = {"repo_path": str(repo_path)}
-        out = run_agent(llm, env, inst)
+        try:
+            out = run_agent(llm, env, inst)
+        except Exception as e:
+            results.append({"id": inst["id"], "success": False,
+                            "steps": 0, "error": str(e)})
+            print(f"{inst['id']}: ERROR {e}")
+            reset_repo(str(repo_path))
+            continue
         reset_repo(str(repo_path))
         results.append({"id": inst["id"], "success": out["success"],
                         "steps": out["steps"], "answer": out["answer"]})

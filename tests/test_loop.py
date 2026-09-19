@@ -49,3 +49,33 @@ def test_loop_reaches_success(tmp_path):
                     {"test_command": "pytest test_m.py -q"})
     assert out["success"] is True
     assert out["steps"] == 4
+
+
+def test_loop_survives_tool_exception(tmp_path, monkeypatch):
+    """工具抛异常时，run_agent 应把错误作为 observation 回传，而不是崩溃。"""
+    import code_agent.loop as loop_mod
+    from code_agent.tools import execute_tool as real_execute
+
+    (tmp_path / "m.py").write_text("def f():\n    return 1\n")
+    (tmp_path / "test_m.py").write_text(
+        "from m import f\n\n\ndef test_f():\n    assert f() == 1\n"
+    )
+
+    def flaky(name, args, env):
+        if name == "read_file":
+            raise RuntimeError("boom")
+        return real_execute(name, args, env)
+
+    monkeypatch.setattr(loop_mod, "execute_tool", flaky)
+
+    llm = FakeLLM([
+        _resp_tool("read_file", {"path": "m.py"}),
+        _resp_tool("run_test", {"test_cmd": "pytest test_m.py -q"}),
+        _resp_text("已修复"),
+    ])
+    out = run_agent(llm, {"repo_path": str(tmp_path)},
+                    {"test_command": "pytest test_m.py -q"})
+    # 异常被捕获，循环继续到最终答案，整体不崩溃
+    assert out["success"] is True
+    tool_messages = [m for m in out["messages"] if m["role"] == "tool"]
+    assert any("工具执行出错" in m["content"] for m in tool_messages)
