@@ -3,7 +3,6 @@
 运行：双击「启动界面.bat」，或 `python -m streamlit run app.py`
 """
 import html
-import re
 import subprocess
 import sys
 from pathlib import Path
@@ -15,7 +14,7 @@ import streamlit as st
 
 from code_agent.llm import LLMClient
 from code_agent.loop import run_agent
-from code_agent.snippet import fix_snippet
+from code_agent.snippet import run_snippet_agent
 
 st.set_page_config(page_title="代码修复 Agent", page_icon="🤖", layout="wide")
 
@@ -74,7 +73,7 @@ code,kbd,pre{ font-family:'JetBrains Mono',monospace; }
 
 TOOL_CN = {
     "read_file": "读文件", "edit_file": "改代码", "run_test": "跑测试",
-    "list_files": "列目录", "search_code": "搜代码",
+    "list_files": "列目录", "search_code": "搜代码", "run_snippet": "运行验证",
 }
 
 
@@ -119,7 +118,7 @@ def _render_trace(out: dict):
             name = entry["name"]
             args = html.escape(str(entry["arguments"])[:160])
             result = html.escape(str(entry["result"])[:900])
-            if name == "run_test":
+            if name in ("run_test", "run_snippet"):
                 passed = "returncode=0" in str(entry["result"])
                 cls, tag = ("step ok", "通过") if passed else ("step err", "失败")
             else:
@@ -182,12 +181,12 @@ st.markdown(
 )
 
 # ================= 标签页 =================
-tab_paste, tab_demo, tab_eval = st.tabs(["📝 粘贴修复", "🔧 单个修复演示", "📊 一键评测"])
+tab_paste, tab_demo, tab_eval = st.tabs(["📝 粘贴修复", "🔧 仓库修复演示", "📊 批量演示"])
 
 # ---------- 粘贴修复 ----------
 with tab_paste:
-    st.markdown("**粘贴你报错的代码，让 agent 找出 bug 并修复。**")
-    st.markdown("不需要知道哪里错了——把代码和报错信息贴进来即可。")
+    st.markdown("**粘贴你报错的代码，让 agent 真调试并修复。**")
+    st.markdown("agent 会实际运行你的代码、看到报错、反复修改直到跑通——下面是它的完整决策日志。")
     code_in = st.text_area(
         "你的代码", height=200,
         placeholder="def divide(a, b):\n    return a / b",
@@ -201,14 +200,15 @@ with tab_paste:
             st.warning("请先粘贴你的代码。")
         else:
             try:
-                with st.spinner("正在分析代码并定位 bug..."):
+                with st.spinner("agent 正在运行并调试你的代码..."):
                     llm = LLMClient()
-                    res = fix_snippet(llm, code_in, err_in or "（未提供报错信息，请根据代码语义判断）")
-                # bug 说明（去掉代码块后的文字）
-                explain = re.sub(r"```.*?```", "", res["answer"], flags=re.DOTALL).strip()
-                if explain:
-                    st.info(explain)
-                _render_before_after(code_in, res["fixed_code"])
+                    res = run_snippet_agent(llm, code_in, err_in or "（未提供报错信息，请根据代码语义判断）")
+                st.markdown("**agent 的调试过程**")
+                _render_trace(res)
+                if res["fixed_code"]:
+                    _render_before_after(code_in, res["fixed_code"])
+                else:
+                    st.warning("agent 没能得到可运行的修复（可能因依赖缺失或步数用尽）。")
                 _render_tokens(res["tokens"])
             except Exception as e:
                 st.error(f"运行出错：{e}")
@@ -233,14 +233,14 @@ with tab_demo:
 
 # ---------- 一键评测 ----------
 with tab_eval:
-    st.markdown("**在 3 个不同的小 bug 上跑评测，统计修复成功率。**")
-    st.markdown("每个都是独立小仓库：字符串反转、空列表求平均、大写元音计数。")
+    st.markdown("**批量跑几个小 bug，看 agent 的修复成功率。**")
+    st.markdown("这只是**快速演示**（3 个手写小 bug），不是严谨评测。真正的评测请用 `scripts/mine_bugs.py` 挖真实 bug + `scripts/evaluate.py`。")
     instances = [
         {"id": "字符串反转", "repo": "benchmark/demo-benchmark/reverse", "test": "pytest test_mylib.py -q"},
         {"id": "空列表求平均", "repo": "benchmark/demo-benchmark/average", "test": "pytest test_mylib.py -q"},
         {"id": "大写元音计数", "repo": "benchmark/demo-benchmark/vowels", "test": "pytest test_mylib.py -q"},
     ]
-    if st.button("📊 开始评测", type="primary"):
+    if st.button("📊 开始演示", type="primary"):
         results = []
         total_tokens = {"prompt": 0, "completion": 0, "total": 0}
         progress = st.progress(0, text="评测中...")
