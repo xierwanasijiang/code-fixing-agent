@@ -18,11 +18,12 @@ from code_agent.loop import run_agent
 from code_agent.sandbox import subprocess_env
 from code_agent.snippet import extract_code_block
 
-BUGS = [
-    {"id": "reverse", "repo": "benchmark/demo-benchmark/reverse"},
-    {"id": "average", "repo": "benchmark/demo-benchmark/average"},
-    {"id": "vowels", "repo": "benchmark/demo-benchmark/vowels"},
-]
+def _scan_bugs(dirname):
+    base = ROOT / dirname
+    return [
+        {"id": d.name, "repo": str(d.relative_to(ROOT))}
+        for d in sorted(base.iterdir()) if d.is_dir()
+    ]
 
 
 def _reset(repo):
@@ -63,9 +64,14 @@ def agent_fix(llm, repo) -> bool:
 
 
 def main():
+    dirname = sys.argv[1] if len(sys.argv) > 1 else "benchmark/real-bugs"
+    bugs = _scan_bugs(dirname)
+    if not bugs:
+        print(f"目录 {dirname} 下没有 bug，请先运行 python scripts/make_real_bugs.py")
+        return
     llm = LLMClient()
     base_ok = agent_ok = 0
-    for b in BUGS:
+    for b in bugs:
         _reset(b["repo"])
         bl = baseline_fix(llm, b["repo"])
         _reset(b["repo"])
@@ -73,7 +79,7 @@ def main():
         print(f"{b['id']}: 基线={'OK' if bl else 'FAIL'}  agent={'OK' if ag else 'FAIL'}")
         base_ok += bl
         agent_ok += ag
-    n = len(BUGS)
+    n = len(bugs)
     print(f"\n基线（直接问 LLM）: {base_ok}/{n} = {base_ok / n * 100:.0f}%")
     print(f"agent（完整 ReAct 循环）: {agent_ok}/{n} = {agent_ok / n * 100:.0f}%")
 
