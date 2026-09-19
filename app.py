@@ -3,6 +3,7 @@
 运行：双击「启动界面.bat」，或 `python -m streamlit run app.py`
 """
 import html
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -17,6 +18,22 @@ from code_agent.loop import run_agent
 from code_agent.snippet import run_snippet_agent
 
 st.set_page_config(page_title="代码修复 Agent", page_icon="🤖", layout="wide")
+
+# ================= 侧边栏：API Key =================
+with st.sidebar:
+    st.markdown("### 🔑 模型 API Key")
+    st.markdown("填入**你自己的** DeepSeek API Key（只存当前会话，不保存、不上传）。")
+    api_key_input = st.text_input(
+        "DeepSeek API Key", type="password", placeholder="sk-...",
+        value=st.session_state.get("api_key", ""),
+    )
+    if api_key_input.strip():
+        st.session_state["api_key"] = api_key_input.strip()
+    if st.session_state.get("api_key", "").strip() or os.environ.get("DEEPSEEK_API_KEY"):
+        st.success("✅ 已就绪，可以运行。")
+    else:
+        st.warning("⚠️ 尚未设置 API Key。\n\n去 [platform.deepseek.com](https://platform.deepseek.com) 免费申请一个，粘贴到上方输入框。")
+    st.caption("默认模型：deepseek-chat（OpenAI 兼容，也可换成你自己的 OpenAI key）")
 
 # ================= 主题 CSS =================
 st.markdown(
@@ -94,10 +111,16 @@ def _write_text(rel_path: str, content: str):
     (ROOT / rel_path).write_text(content, encoding="utf-8")
 
 
-def _run(repo: str, test_cmd: str, reset: bool = True):
+def _get_llm():
+    key = st.session_state.get("api_key", "").strip() or os.environ.get("DEEPSEEK_API_KEY", "")
+    if not key:
+        return None
+    return LLMClient(api_key=key)
+
+
+def _run(llm, repo: str, test_cmd: str, reset: bool = True):
     if reset:
         _reset(repo)
-    llm = LLMClient()
     env = {"repo_path": str(ROOT / repo)}
     return run_agent(llm, env, {"test_command": test_cmd})
 
@@ -218,19 +241,22 @@ with tab_paste:
         if not code_in.strip():
             st.warning("请先粘贴你的代码。")
         else:
-            try:
-                with st.spinner("agent 正在运行并调试你的代码..."):
-                    llm = LLMClient()
-                    res = run_snippet_agent(llm, code_in, err_in or "（未提供报错信息，请根据代码语义判断）")
-                st.markdown("**agent 的调试过程**")
-                _render_trace(res)
-                if res["fixed_code"]:
-                    _render_before_after(code_in, res["fixed_code"])
-                else:
-                    st.warning("agent 没能得到可运行的修复（可能因依赖缺失或步数用尽）。")
-                _render_tokens(res["tokens"])
-            except Exception as e:
-                st.error(f"运行出错：{e}")
+            llm = _get_llm()
+            if llm is None:
+                st.warning("请先在左侧侧边栏填写 DeepSeek API Key。")
+            else:
+                try:
+                    with st.spinner("agent 正在运行并调试你的代码..."):
+                        res = run_snippet_agent(llm, code_in, err_in or "（未提供报错信息，请根据代码语义判断）")
+                    st.markdown("**agent 的调试过程**")
+                    _render_trace(res)
+                    if res["fixed_code"]:
+                        _render_before_after(code_in, res["fixed_code"])
+                    else:
+                        st.warning("agent 没能得到可运行的修复（可能因依赖缺失或步数用尽）。")
+                    _render_tokens(res["tokens"])
+                except Exception as e:
+                    st.error(f"运行出错：{e}")
 
 # ---------- 单个修复演示 ----------
 with tab_demo:
@@ -251,16 +277,20 @@ with tab_demo:
             st.rerun()
     with col_run:
         if st.button("🚀 运行修复", type="primary"):
-            _write_text("benchmark/demo/calc.py", calc_val)
-            _write_text("benchmark/demo/test_calc.py", test_val)
-            try:
-                with st.spinner("agent 正在读代码、改 bug、跑测试..."):
-                    out = _run("benchmark/demo", "pytest test_calc.py -q", reset=False)
-                _render_trace(out)
-                _render_before_after(calc_val, _read_text("benchmark/demo/calc.py"))
-                _render_tokens(out["tokens"])
-            except Exception as e:
-                st.error(f"运行出错：{e}")
+            llm = _get_llm()
+            if llm is None:
+                st.warning("请先在左侧侧边栏填写 DeepSeek API Key。")
+            else:
+                _write_text("benchmark/demo/calc.py", calc_val)
+                _write_text("benchmark/demo/test_calc.py", test_val)
+                try:
+                    with st.spinner("agent 正在读代码、改 bug、跑测试..."):
+                        out = _run(llm, "benchmark/demo", "pytest test_calc.py -q", reset=False)
+                    _render_trace(out)
+                    _render_before_after(calc_val, _read_text("benchmark/demo/calc.py"))
+                    _render_tokens(out["tokens"])
+                except Exception as e:
+                    st.error(f"运行出错：{e}")
 
 # ---------- 一键评测 ----------
 with tab_eval:
@@ -288,31 +318,35 @@ with tab_eval:
             edits[b["repo"]] = (code, test)
 
     if st.button("📊 开始演示", type="primary"):
-        results = []
-        total_tokens = {"prompt": 0, "completion": 0, "total": 0}
-        progress = st.progress(0, text="运行中...")
-        for i, b in enumerate(bugs):
-            code, test = edits[b["repo"]]
-            _write_text(f"{b['repo']}/mylib.py", code)
-            _write_text(f"{b['repo']}/test_mylib.py", test)
-            try:
-                out = _run(b["repo"], "pytest test_mylib.py -q", reset=False)
-                results.append({"任务": b["id"], "结果": "✅ 修复" if out["success"] else "❌ 未修复", "步数": out["steps"]})
-                for k in total_tokens:
-                    total_tokens[k] += out["tokens"].get(k, 0)
-                # 展示该 bug 的完整 ReAct 过程（思考→行动→观察）
-                label = f"🐛 {b['id']} — {'✅ 修复' if out['success'] else '❌ 未修复'}（{out['steps']} 步）"
-                with st.expander(label, expanded=(i == 0)):
-                    _render_trace(out)
-            except Exception as e:
-                results.append({"任务": b["id"], "结果": "❌ 异常", "步数": "-"})
-                st.error(f"{b['id']} 运行出错：{e}")
-            progress.progress((i + 1) / len(bugs), text=f"已完成 {i + 1}/{len(bugs)}")
+        llm = _get_llm()
+        if llm is None:
+            st.warning("请先在左侧侧边栏填写 DeepSeek API Key。")
+        else:
+            results = []
+            total_tokens = {"prompt": 0, "completion": 0, "total": 0}
+            progress = st.progress(0, text="运行中...")
+            for i, b in enumerate(bugs):
+                code, test = edits[b["repo"]]
+                _write_text(f"{b['repo']}/mylib.py", code)
+                _write_text(f"{b['repo']}/test_mylib.py", test)
+                try:
+                    out = _run(llm, b["repo"], "pytest test_mylib.py -q", reset=False)
+                    results.append({"任务": b["id"], "结果": "✅ 修复" if out["success"] else "❌ 未修复", "步数": out["steps"]})
+                    for k in total_tokens:
+                        total_tokens[k] += out["tokens"].get(k, 0)
+                    # 展示该 bug 的完整 ReAct 过程（思考→行动→观察）
+                    label = f"🐛 {b['id']} — {'✅ 修复' if out['success'] else '❌ 未修复'}（{out['steps']} 步）"
+                    with st.expander(label, expanded=(i == 0)):
+                        _render_trace(out)
+                except Exception as e:
+                    results.append({"任务": b["id"], "结果": "❌ 异常", "步数": "-"})
+                    st.error(f"{b['id']} 运行出错：{e}")
+                progress.progress((i + 1) / len(bugs), text=f"已完成 {i + 1}/{len(bugs)}")
 
-        st.table(results)
-        resolved = sum(1 for r in results if "✅" in r["结果"])
-        st.metric("修复成功率", f"{resolved}/{len(bugs)} = {resolved / len(bugs) * 100:.0f}%")
-        _render_tokens(total_tokens)
+            st.table(results)
+            resolved = sum(1 for r in results if "✅" in r["结果"])
+            st.metric("修复成功率", f"{resolved}/{len(bugs)} = {resolved / len(bugs) * 100:.0f}%")
+            _render_tokens(total_tokens)
 
     with st.expander("➕ 添加你自己的 bug"):
         new_name = st.text_input("bug 名称", placeholder="例如：列表去重")

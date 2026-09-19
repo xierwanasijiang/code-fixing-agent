@@ -1,83 +1,124 @@
-# 代码修复 Agent
+# 代码修复 Agent（Code Bug-Fixing Agent）
 
-从零手写的 ReAct 代码 bug 修复 Agent，不用 LangChain/LangGraph，只用 DeepSeek 的 function calling。
+> 一个**从零手写**的 ReAct 代码修复智能体：你给它一段报错的代码或一个仓库，它会自己思考、动手、验证，一步步把 bug 修好。**不使用 LangChain / LangGraph 等任何 Agent 框架**，只用大模型（DeepSeek/OpenAI）的 function calling。
 
-## 架构
+---
 
-四层结构，各司其职：
+## 它能做什么
+
+给你一个报错的场景，agent 会按「思考 → 行动 → 观察」的循环反复迭代，直到修复：
 
 ```
-┌─────────────────────────────────────────────┐
-│ 1. Agent 循环（大脑）  手写 ReAct 循环         │
-│    LLM 决策 → 调用工具 → 观察结果 → 再决策    │
-├─────────────────────────────────────────────┤
-│ 2. 工具集（手）                                │
-│    读文件 / 搜索代码 / 改文件 / 跑测试 / 列文件 │
-├─────────────────────────────────────────────┤
-│ 3. 执行环境（沙盒）                            │
-│    被修的 Python 仓库 + 它的测试，隔离运行     │
-├─────────────────────────────────────────────┤
-│ 4. 评测层（裁判）                              │
-│    benchmark 里的 bug + 修复成功率 + 消融     │
-└─────────────────────────────────────────────┘
+💭 思考：观察到测试在 test_divide_by_zero 失败，说明 divide 没处理除 0；决定先读 calc.py 确认
+🔧 行动：read_file(calc.py)
+👁 观察：读到了 `return a / b`，没有除 0 判断
+💭 思考：决定加 if b == 0 的判断
+🔧 行动：edit_file(...)
+🧪 验证：run_test → returncode=0，1 passed
+✅ 修复成功
 ```
 
-- **Agent 循环**：手写 ReAct 循环（`src/code_agent/loop.py`），核心是一个 `while` + prompt 拼装 + 一次 API 调用，约 300 行。LLM 决策 → 调用工具 → 观察结果 → 再决策，直到测试通过 / 超出步数上限 / 模型宣布放弃。
-- **工具集**（5 个，`src/code_agent/tools.py`）：`list_files` / `read_file` / `search_code` / `edit_file` / `run_test`。
-- **沙盒**（`src/code_agent/sandbox.py`）：在独立 git checkout 里改代码，跑测试用 `subprocess` + 超时，跑完 `git checkout -- .` 重置，保证 bug 之间互不污染。
-- **评测层**：自建真实 bug benchmark + 修复成功率 + 消融实验。
+界面（Streamlit）会把上面**每一步的思考、行动、观察都可视化出来**，让你看清 agent 到底在干什么。
 
-完整的架构、设计决策与非目标，见设计文档 [docs/superpowers/specs/2026-09-19-code-agent-design.md](docs/superpowers/specs/2026-09-19-code-agent-design.md)。
+## 三个功能
 
-## 快速开始
+| 页签 | 用途 | 用的工具 |
+|------|------|---------|
+| 📝 **粘贴修复** | 贴一段报错代码 + 报错信息，agent 真运行、真调试、修好它 | `run_snippet`（执行验证） |
+| 🔧 **仓库修复** | agent 在真实仓库里修 bug（代码可编辑、可重置） | `read_file`/`edit_file`/`run_test`/`search_code`/`list_files` |
+| 📊 **批量演示** | 一批 bug 上跑修复成功率（每个 bug 的 ReAct 过程可展开看） | 仓库那套工具 |
+
+## 为什么要看这个项目（价值所在）
+
+1. **从零手写 ReAct 循环**——不是 `import langchain` 调库，而是自己实现了 Thought-Action-Observation 的完整循环，真正理解 agent 内部发生了什么。
+2. **工具执行安全**——agent 能调工具，就意味着模型输出能触达你的机器。本项目做了**命令白名单**（只允许跑 pytest）和**路径穿越校验**（read/edit 越界直接拒绝），这是绝大多数教程项目没有的。
+3. **有基线对比实验**——没有对比的"我的 agent 很牛"是耍流氓。本项目写了 `scripts/compare.py`，在同一批 bug 上对比「agent」和「直接问一次 LLM」。
+4. **token 花费追踪**——每次运行都统计输入/输出 token 和估算成本。
+5. **工程规范**——TDD、单元测试、完整 git 提交历史、清晰的模块划分。
+
+## 涉及的核心知识点
+
+| 知识点 | 在项目里对应什么 |
+|--------|-----------------|
+| **ReAct 范式** | `loop.py` 里的思考-行动-观察循环 |
+| **Function Calling（工具调用）** | `tools.py` 里 6 个工具的 JSON schema + 执行分发 |
+| **OpenAI 兼容协议** | `llm.py` 用 `openai` SDK 指向 DeepSeek，消息按 `assistant.tool_calls` + `role:"tool"` 回传 |
+| **上下文管理** | `context.py` 管理多轮消息，超长观察结果截断 |
+| **工具安全** | 命令白名单 + 路径穿越校验 + 执行超时 |
+| **评测方法** | `mine_bugs.py`（挖真实 bug）、`evaluate.py`（成功率）、`compare.py`（基线对比）、`ablate.py`（消融） |
+| **Prompt 工程** | `prompts.py` 的系统提示词 + 引导思考的提问 |
+
+## 快速开始（一键运行）
+
+**前置**：安装 Python 3.10+（[python.org](https://www.python.org) 下载，安装时勾选 "Add to PATH"）。
+
+然后**双击 `启动界面.bat`**，它会自动：
+
+1. 检查依赖（streamlit / openai / pytest）是否装好；
+2. 没装就问你「是否现在安装」，选 Y 自动安装；
+3. 装好后就启动界面，浏览器自动打开 `http://localhost:8501`。
+
+**接着在界面左侧侧边栏填入你自己的 API Key**（去 [platform.deepseek.com](https://platform.deepseek.com) 免费申请一个；key 只存在当前会话，不会保存、不会上传），就能开始用了。
+
+> 手动运行也可以：
+> ```bash
+> pip install -r requirements.txt
+> python -m streamlit run app.py
+> ```
+
+## 评测与基线对比（诚实结论）
+
+在 `scripts/make_real_bugs.py` 手写的 8 个真实 bug 模式（可变默认参数、保序去重、大小写、off-by-one、递归缺基准、递归 flatten、返回哨兵值错误、过滤负数等）上：
+
+- **基线（直接把代码+测试塞给 LLM 问一次）：8/8 = 100%**
+- **agent（完整 ReAct 循环）：8/8 = 100%**
+
+结论很诚实：**在"单函数、单个清晰 bug"这种简单场景，一次问 LLM 和完整 agent 持平**——因为强模型看一遍就能修对，agent 的多步循环是冗余。
+
+**agent 的价值在"一次问不出来"的场景**：多文件、需要探索搜索、第一次修复会错的 bug。这需要更难的真实 benchmark（本项目的 `mine_bugs.py` + `evaluate.py` 已为此写好，从真实仓库 git 历史挖 bug），这是进一步工作的方向。
+
+> 这个"诚实承认 agent 在简单场景无优势"的结论，本身就是一个有说服力的点：它说明你会做对照实验、会质疑自己的东西。
+
+## 项目结构
+
+```
+├── 启动界面.bat            # 一键启动（检查/安装依赖 + 打开界面）
+├── app.py                  # Streamlit 界面
+├── requirements.txt        # 依赖
+├── src/code_agent/         # 核心代码
+│   ├── llm.py              #   LLM 客户端 + 响应解析 + token 用量
+│   ├── prompts.py          #   系统提示词 + 思考引导
+│   ├── context.py          #   上下文（消息列表）管理
+│   ├── tools.py            #   5 个仓库工具 + 安全校验 + 执行分发
+│   ├── sandbox.py          #   沙盒：跑 pytest、reset 仓库、subprocess 环境
+│   ├── loop.py             #   ReAct 主循环（思考→行动→观察）
+│   └── snippet.py          #   粘贴修复模式（run_snippet 工具 + 循环）
+├── scripts/                # 命令行脚本
+│   ├── demo_weather.py     #   最小 function calling 演示
+│   ├── demo_fix.py         #   端到端修一个 bug
+│   ├── mine_bugs.py        #   从真实仓库 git 历史挖 bug
+│   ├── evaluate.py         #   批量评测
+│   ├── compare.py          #   基线 vs agent 对比
+│   ├── ablate.py           #   消融实验
+│   └── make_real_bugs.py   #   生成真实 bug 模式评测集
+├── benchmark/              # 评测用的 bug（demo / 手写真实 bug / 挖出的实例）
+└── tests/                  # 单元测试（28 个）
+```
+
+## 运行测试
 
 ```bash
-# 1. 装依赖
-pip install -r requirements.txt
-
-# 2. 配置 DeepSeek API key
-export DEEPSEEK_API_KEY=你的key      # Windows: set DEEPSEEK_API_KEY=你的key
-
-# 3. 阶段 0：体会 function calling 闭环（模型调用 get_weather 工具）
-python scripts/demo_weather.py
-
-# 4. 阶段 1：端到端修好 benchmark/demo 里的 bug
-python scripts/demo_fix.py
-
-# 5. 阶段 2：从目标库 git 历史挖真实 bug（<repo_url> <repo_name> <max_bugs>）
-python scripts/mine_bugs.py https://github.com/Textualize/rich.git rich 30
-
-# 6. 阶段 3：在 benchmark 上全量评测，统计修复成功率
-python scripts/evaluate.py
-
-# 7. 阶段 3：消融实验（变量名可选 no_search / model / max_steps）
-python scripts/ablate.py no_search ""
-python scripts/ablate.py model deepseek-reasoner
-python scripts/ablate.py max_steps 5
+python -m pytest
 ```
 
-> 运行 `demo_weather.py` / `demo_fix.py` / `mine_bugs.py` / `evaluate.py` / `ablate.py` 都需要先配置 `DEEPSEEK_API_KEY`。
+## 技术栈
 
-## 结果
+- **语言**：Python 3.10+
+- **模型**：DeepSeek `deepseek-chat`（OpenAI 兼容，`openai` SDK，换 OpenAI/GPT 只需改 base_url 和模型名）
+- **界面**：Streamlit
+- **测试**：pytest
+- **显式不用**：LangChain / LangGraph / AutoGPT 等 Agent 框架
 
-> ⚠️ 以下数字尚未填写：真实评测依赖 `DEEPSEEK_API_KEY`，**待配置 key 并运行 `python scripts/evaluate.py` 与 `python scripts/ablate.py` 后，将真实数字回填到本节**。
+## License
 
-- 修复成功率：`X/30 = Y%`
-- 消融：
-  - 去掉 `search_code` 工具后成功率下降 `Z%`
-  - 换 `deepseek-reasoner` 后成功率变化 `±W%`
-  - `max_steps=5` 时成功率变化 `±V%`
-
-## 亮点
-
-- 约 300 行手写 ReAct 循环，不套 LangChain/LangGraph
-- 自建真实 bug benchmark（从 git 历史挖掘 fix 提交 + 失败测试）
-- 可复现评测 + 消融实验，能量化每个设计决策的价值
-
-## 测试
-
-```bash
-python -m pytest -q
-```
-
-`pytest.ini` 中 `testpaths = tests`，只收集 `tests/` 下的单元测试（`benchmark/demo` 里故意留 bug 的 `test_calc.py` 不会被当作失败用例收集）。
+MIT
