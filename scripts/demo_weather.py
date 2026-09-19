@@ -1,6 +1,10 @@
 """阶段 0 demo：让模型调用一个 get_weather 工具，体会 function calling 的完整闭环。"""
 import json
 import os
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from code_agent.llm import LLMClient, parse_response
 

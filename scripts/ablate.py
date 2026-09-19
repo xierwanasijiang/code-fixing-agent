@@ -7,6 +7,9 @@
   max_steps       —— 限制最大步数（值为整数）
 """
 import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from code_agent.llm import LLMClient
 from code_agent.loop import run_agent
@@ -30,6 +33,10 @@ def main():
     ROOT = Path(__file__).resolve().parent.parent
     inst = json.loads(next((ROOT / "benchmark" / "instances").glob("*.json")).read_text())
     env = {"repo_path": str(ROOT / "benchmark" / "repos" / inst["repo"])}
+    # 切到实例的 bug 状态（否则在已修好的提交上跑，消融无意义）
+    import subprocess
+    subprocess.run(f"git checkout {inst['bug_commit']}", shell=True,
+                   cwd=env["repo_path"], capture_output=True, text=True)
     out = run_agent(llm, env, inst, max_steps=max_steps)
     print(f"变量={var} 值={val} -> success={out['success']} steps={out['steps']}")
 

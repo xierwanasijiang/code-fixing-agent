@@ -1,6 +1,9 @@
 """在 benchmark 上全量跑 agent，统计修复成功率。"""
 import json
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from code_agent.llm import LLMClient
 from code_agent.loop import run_agent

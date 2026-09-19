@@ -1,4 +1,9 @@
 """阶段 1 demo：让 agent 端到端修好 benchmark/demo 里的 bug。"""
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+
 from code_agent.llm import LLMClient
 from code_agent.loop import run_agent
 

@@ -7,6 +7,10 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+
+from code_agent.sandbox import subprocess_env
+
 ROOT = Path(__file__).resolve().parent.parent
 REPOS_DIR = ROOT / "benchmark" / "repos"
 OUT_DIR = ROOT / "benchmark" / "instances"
@@ -14,7 +18,8 @@ OUT_DIR = ROOT / "benchmark" / "instances"
 
 def run(cmd, cwd):
     return subprocess.run(cmd, shell=True, cwd=cwd,
-                          capture_output=True, text=True)
+                          capture_output=True, text=True,
+                          env=subprocess_env())
 
 
 def changed_test_files(commit, cwd):
@@ -58,7 +63,7 @@ def main():
         test_files = changed_test_files(fix_commit, repo_dir)
         if not test_files:
             continue
-        bug_commit = f"{fix_commit}^"
+        bug_commit = f"{fix_commit}~1"
         run(f"git checkout {bug_commit}", repo_dir)
         fail_to_pass = []
         for tf in test_files:
