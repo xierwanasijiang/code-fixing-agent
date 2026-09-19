@@ -300,8 +300,13 @@ with tab_eval:
                 results.append({"任务": b["id"], "结果": "✅ 修复" if out["success"] else "❌ 未修复", "步数": out["steps"]})
                 for k in total_tokens:
                     total_tokens[k] += out["tokens"].get(k, 0)
+                # 展示该 bug 的完整 ReAct 过程（思考→行动→观察）
+                label = f"🐛 {b['id']} — {'✅ 修复' if out['success'] else '❌ 未修复'}（{out['steps']} 步）"
+                with st.expander(label, expanded=(i == 0)):
+                    _render_trace(out)
             except Exception as e:
                 results.append({"任务": b["id"], "结果": "❌ 异常", "步数": "-"})
+                st.error(f"{b['id']} 运行出错：{e}")
             progress.progress((i + 1) / len(bugs), text=f"已完成 {i + 1}/{len(bugs)}")
 
         st.table(results)
