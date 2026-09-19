@@ -22,16 +22,16 @@ st.set_page_config(page_title="代码修复 Agent", page_icon="🤖", layout="wi
 # ================= 侧边栏：API Key =================
 with st.sidebar:
     st.markdown("### 🔑 模型 API Key")
-    st.markdown("填入**你自己的** DeepSeek API Key（只存当前会话，不保存、不上传）。")
+    st.markdown("填写您自己的 DeepSeek API Key。仅保存在当前会话，不持久化、不上传。")
     st.text_input(
         "DeepSeek API Key", type="password", placeholder="sk-...", key="api_key",
     )
     has_key = bool((st.session_state.get("api_key") or "").strip()) or bool(os.environ.get("DEEPSEEK_API_KEY"))
     if has_key:
-        st.success("✅ 已就绪，可以运行。")
+        st.success("✅ 已配置，可正常使用。")
     else:
-        st.warning("⚠️ 尚未设置 API Key。\n\n去 [platform.deepseek.com](https://platform.deepseek.com) 免费申请一个，粘贴到上方输入框。")
-    st.caption("默认模型：deepseek-chat（OpenAI 兼容，也可换成你自己的 OpenAI key）")
+        st.warning("⚠️ 尚未配置 API Key。\n\n请在 [platform.deepseek.com](https://platform.deepseek.com) 申请后填写至上方输入框。")
+    st.caption("默认模型：deepseek-chat（OpenAI 兼容）")
 
 # ================= 主题 CSS =================
 st.markdown(
@@ -88,8 +88,8 @@ code,kbd,pre{ font-family:'JetBrains Mono',monospace; }
 )
 
 TOOL_CN = {
-    "read_file": "读文件", "edit_file": "改代码", "run_test": "跑测试",
-    "list_files": "列目录", "search_code": "搜代码", "run_snippet": "运行验证",
+    "read_file": "读取文件", "edit_file": "修改代码", "run_test": "运行测试",
+    "list_files": "列出文件", "search_code": "搜索代码", "run_snippet": "运行验证",
 }
 
 
@@ -140,7 +140,7 @@ def _render_tokens(tokens: dict):
         f'</div>',
         unsafe_allow_html=True,
     )
-    st.caption("花费按 deepseek-chat 输入 ¥2/百万、输出 ¥8/百万 粗略估算，以官网为准。")
+    st.caption("费用按 deepseek-chat 输入 ¥2/百万 tokens、输出 ¥8/百万 tokens 估算，实际以官方计费为准。")
 
 
 def _render_trace(out: dict):
@@ -150,7 +150,7 @@ def _render_trace(out: dict):
             st.markdown(
                 f'<div class="step thought">'
                 f'<div class="gutter">{entry["step"]:02d}</div>'
-                f'<div class="body"><div class="prompt">💭 思考</div>'
+                f'<div class="body"><div class="prompt">💭 推理</div>'
                 f'<div class="detail">{thought}</div></div></div>',
                 unsafe_allow_html=True,
             )
@@ -175,7 +175,7 @@ def _render_trace(out: dict):
             )
         elif entry["type"] == "final":
             cls = "step ok" if entry["success"] else "step err"
-            label = "✓ 修复成功" if entry["success"] else "✕ 未修复"
+            label = "✓ 修复成功" if entry["success"] else "✕ 修复失败"
             answer = html.escape(str(entry.get("answer", ""))[:500])
             st.markdown(
                 f'<div class="{cls}"><div class="gutter">✓</div>'
@@ -202,7 +202,7 @@ st.markdown(
 <div class="hero">
   <div class="kicker">ReAct · Bug-Fixing Agent</div>
   <h1>代码修复 Agent</h1>
-  <p class="sub">从零手写的 ReAct 智能体 —— 观察、决策、执行、验证，一步步自己修好代码里的 bug。不使用任何 Agent 框架。</p>
+  <p class="sub">从零实现的 ReAct 智能体，通过「观察 → 决策 → 执行 → 验证」循环，自主定位并修复代码缺陷。不依赖任何 Agent 框架。</p>
 </div>
 """,
     unsafe_allow_html=True,
@@ -225,41 +225,41 @@ tab_paste, tab_demo, tab_eval = st.tabs(["📝 粘贴修复", "🔧 仓库修复
 
 # ---------- 粘贴修复 ----------
 with tab_paste:
-    st.markdown("**粘贴你报错的代码，让 agent 真调试并修复。**")
-    st.markdown("agent 会实际运行你的代码、看到报错、反复修改直到跑通——下面是它的完整决策日志。")
+    st.markdown("**粘贴报错代码，由 Agent 定位并修复缺陷。**")
+    st.markdown("Agent 将执行您的代码、读取报错信息、迭代修复直至通过验证，下方展示其完整决策过程。")
     code_in = st.text_area(
-        "你的代码", height=200,
+        "代码", height=200,
         placeholder="def divide(a, b):\n    return a / b",
     )
     err_in = st.text_area(
         "报错信息 / 期望行为", height=100,
         placeholder="ZeroDivisionError: division by zero\n（或：除数为 0 时应该返回 None）",
     )
-    if st.button("🔍 找出 bug 并修复", type="primary"):
+    if st.button("🔍 定位并修复", type="primary"):
         if not code_in.strip():
-            st.warning("请先粘贴你的代码。")
+            st.warning("请先输入代码。")
         else:
             llm = _get_llm()
             if llm is None:
-                st.warning("请先在左侧侧边栏填写 DeepSeek API Key。")
+                st.warning("请先在左侧配置 API Key。")
             else:
                 try:
-                    with st.spinner("agent 正在运行并调试你的代码..."):
+                    with st.spinner("Agent 正在运行并调试代码..."):
                         res = run_snippet_agent(llm, code_in, err_in or "（未提供报错信息，请根据代码语义判断）")
-                    st.markdown("**agent 的调试过程**")
+                    st.markdown("**Agent 的决策过程**")
                     _render_trace(res)
                     if res["fixed_code"]:
                         _render_before_after(code_in, res["fixed_code"])
                     else:
-                        st.warning("agent 没能得到可运行的修复（可能因依赖缺失或步数用尽）。")
+                        st.warning("Agent 未能生成可运行的修复（可能因依赖缺失或达到最大步数）。")
                     _render_tokens(res["tokens"])
                 except Exception as e:
-                    st.error(f"运行出错：{e}")
+                    st.error(f"执行出错：{e}")
 
 # ---------- 单个修复演示 ----------
 with tab_demo:
-    st.markdown("**下面是 agent 要修复的仓库，代码可直接修改——改完就是你的 bug。**")
-    st.caption("点「运行修复」后，agent 会读这个文件、改代码、跑测试，下面的决策日志会一步步展示它做了什么。")
+    st.markdown("**以下为待修复的示例仓库，代码可编辑。**")
+    st.caption("点击「运行修复」后，Agent 将读取文件、修改代码并运行测试，下方决策日志展示其推理与操作过程。")
     c1, c2 = st.columns(2)
     with c1:
         st.markdown("**`calc.py`**")
@@ -270,30 +270,30 @@ with tab_demo:
 
     col_reset, col_run = st.columns([1, 2])
     with col_reset:
-        if st.button("🔄 重置为初始 bug"):
+        if st.button("🔄 重置示例"):
             _reset("benchmark/demo")
             st.rerun()
     with col_run:
         if st.button("🚀 运行修复", type="primary"):
             llm = _get_llm()
             if llm is None:
-                st.warning("请先在左侧侧边栏填写 DeepSeek API Key。")
+                st.warning("请先在左侧配置 API Key。")
             else:
                 _write_text("benchmark/demo/calc.py", calc_val)
                 _write_text("benchmark/demo/test_calc.py", test_val)
                 try:
-                    with st.spinner("agent 正在读代码、改 bug、跑测试..."):
+                    with st.spinner("Agent 正在读取代码、修复缺陷并运行测试..."):
                         out = _run(llm, "benchmark/demo", "pytest test_calc.py -q", reset=False)
                     _render_trace(out)
                     _render_before_after(calc_val, _read_text("benchmark/demo/calc.py"))
                     _render_tokens(out["tokens"])
                 except Exception as e:
-                    st.error(f"运行出错：{e}")
+                    st.error(f"执行出错：{e}")
 
 # ---------- 一键评测 ----------
 with tab_eval:
-    st.markdown("**下面是几个小 bug，代码可直接修改，也能在底部添加你自己的 bug。**")
-    st.caption("这只是**快速演示**（手写小 bug），不是严谨评测。真正的评测用 `scripts/mine_bugs.py` + `scripts/evaluate.py`。")
+    st.markdown("**以下为若干示例缺陷，代码可编辑，也可在下方新增自定义缺陷。**")
+    st.caption("说明：本页为快速演示（内置示例缺陷），非严谨评测。严谨评测请使用 `scripts/mine_bugs.py` 与 `scripts/evaluate.py`。")
 
     base_bugs = [
         {"id": "字符串反转", "repo": "benchmark/demo-benchmark/reverse"},
@@ -315,30 +315,30 @@ with tab_eval:
                 test = st.text_area("测试", value=_read_text(f"{b['repo']}/test_mylib.py"), key=f"{b['repo']}_test", height=110, label_visibility="collapsed")
             edits[b["repo"]] = (code, test)
 
-    if st.button("📊 开始演示", type="primary"):
+    if st.button("📊 运行批量演示", type="primary"):
         llm = _get_llm()
         if llm is None:
-            st.warning("请先在左侧侧边栏填写 DeepSeek API Key。")
+            st.warning("请先在左侧配置 API Key。")
         else:
             results = []
             total_tokens = {"prompt": 0, "completion": 0, "total": 0}
-            progress = st.progress(0, text="运行中...")
+            progress = st.progress(0, text="正在运行...")
             for i, b in enumerate(bugs):
                 code, test = edits[b["repo"]]
                 _write_text(f"{b['repo']}/mylib.py", code)
                 _write_text(f"{b['repo']}/test_mylib.py", test)
                 try:
                     out = _run(llm, b["repo"], "pytest test_mylib.py -q", reset=False)
-                    results.append({"任务": b["id"], "结果": "✅ 修复" if out["success"] else "❌ 未修复", "步数": out["steps"]})
+                    results.append({"任务": b["id"], "结果": "✅ 成功" if out["success"] else "❌ 失败", "步骤": out["steps"]})
                     for k in total_tokens:
                         total_tokens[k] += out["tokens"].get(k, 0)
-                    # 展示该 bug 的完整 ReAct 过程（思考→行动→观察）
-                    label = f"🐛 {b['id']} — {'✅ 修复' if out['success'] else '❌ 未修复'}（{out['steps']} 步）"
+                    # 展示该缺陷的完整 ReAct 过程（推理→行动→观察）
+                    label = f"🐛 {b['id']} — {'✅ 成功' if out['success'] else '❌ 失败'}（{out['steps']} 步）"
                     with st.expander(label, expanded=(i == 0)):
                         _render_trace(out)
                 except Exception as e:
-                    results.append({"任务": b["id"], "结果": "❌ 异常", "步数": "-"})
-                    st.error(f"{b['id']} 运行出错：{e}")
+                    results.append({"任务": b["id"], "结果": "❌ 异常", "步骤": "-"})
+                    st.error(f"{b['id']} 执行出错：{e}")
                 progress.progress((i + 1) / len(bugs), text=f"已完成 {i + 1}/{len(bugs)}")
 
             st.table(results)
@@ -346,18 +346,18 @@ with tab_eval:
             st.metric("修复成功率", f"{resolved}/{len(bugs)} = {resolved / len(bugs) * 100:.0f}%")
             _render_tokens(total_tokens)
 
-    with st.expander("➕ 添加你自己的 bug"):
-        new_name = st.text_input("bug 名称", placeholder="例如：列表去重")
+    with st.expander("➕ 新增自定义缺陷"):
+        new_name = st.text_input("缺陷名称", placeholder="例如：列表去重")
         new_code = st.text_area("代码 `mylib.py`", height=110, placeholder="def dedup(xs):\n    return xs")
         new_test = st.text_area("测试 `test_mylib.py`", height=90, placeholder="from mylib import dedup\n\n\ndef test_dedup():\n    assert dedup([1, 1, 2]) == [1, 2]")
-        if st.button("➕ 添加"):
+        if st.button("➕ 新增"):
             if not (new_name.strip() and new_code.strip() and new_test.strip()):
-                st.warning("名称、代码、测试都要填。")
+                st.warning("请完整填写名称、代码与测试。")
             else:
                 repo = f"benchmark/demo-benchmark/{new_name.strip()}"
                 (ROOT / repo).mkdir(parents=True, exist_ok=True)
                 _write_text(f"{repo}/mylib.py", new_code)
                 _write_text(f"{repo}/test_mylib.py", new_test)
                 st.session_state.setdefault("extra_bugs", []).append({"id": new_name.strip(), "repo": repo})
-                st.success(f"已添加 bug：{new_name.strip()}")
+                st.success(f"已新增缺陷：{new_name.strip()}")
                 st.rerun()
