@@ -1,0 +1,37 @@
+"""消融实验：改变单一变量，观察修复成功率的变化。
+
+用法：python scripts/ablate.py <变量名> <值>
+变量名可选：
+  no_search       —— 去掉 search_code 工具
+  model           —— 换模型（值为模型名，如 deepseek-reasoner）
+  max_steps       —— 限制最大步数（值为整数）
+"""
+import sys
+
+from code_agent.llm import LLMClient
+from code_agent.loop import run_agent
+import code_agent.loop as loop_mod
+import code_agent.tools as tools_mod
+
+
+def main():
+    var, val = sys.argv[1], sys.argv[2]
+    llm = LLMClient(model=val if var == "model" else "deepseek-chat")
+    max_steps = int(val) if var == "max_steps" else 15
+
+    if var == "no_search":
+        tools_mod.TOOL_SCHEMAS = [t for t in tools_mod.TOOL_SCHEMAS
+                                  if t["function"]["name"] != "search_code"]
+
+    # 复用 evaluate.py 的逻辑（简单起见，这里只跑第一个实例示意）
+    import json
+    from pathlib import Path
+    ROOT = Path(__file__).resolve().parent.parent
+    inst = json.loads(next((ROOT / "benchmark" / "instances").glob("*.json")).read_text())
+    env = {"repo_path": str(ROOT / "benchmark" / "repos" / inst["repo"])}
+    out = run_agent(llm, env, inst, max_steps=max_steps)
+    print(f"变量={var} 值={val} -> success={out['success']} steps={out['steps']}")
+
+
+if __name__ == "__main__":
+    main()
