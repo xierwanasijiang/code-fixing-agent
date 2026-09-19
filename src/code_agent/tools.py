@@ -1,9 +1,12 @@
 """工具集：OpenAI tools schema + 实际执行。"""
-import os
+import re
 import subprocess
 from pathlib import Path
 
+from .sandbox import subprocess_env
+
 MAX_READ_CHARS = 8000
+_EXCLUDED_DIRS = {".git", "__pycache__", ".venv", "venv", ".pytest_cache"}
 
 
 def _read_file(repo_path, path, start=None, end=None):
@@ -22,20 +25,38 @@ def _list_files(repo_path, path="."):
     p = Path(repo_path) / path
     entries = []
     for f in sorted(p.rglob("*")):
-        if any(part in {".git", "__pycache__", ".venv"} for part in f.parts):
+        if any(part in _EXCLUDED_DIRS for part in f.parts):
             continue
         entries.append(str(f.relative_to(repo_path)))
     return "\n".join(entries[:200])
 
 
 def _search_code(repo_path, pattern):
-    result = subprocess.run(
-        ["grep", "-rn", "--include=*.py", pattern, "."],
-        cwd=repo_path,
-        capture_output=True,
-        text=True,
-    )
-    return (result.stdout or "无匹配")[:6000]
+    """在仓库的 .py 文件里按关键字/正则搜索，返回 '文件:行号:内容' 列表。
+
+    纯 Python 实现，不依赖系统 grep（Windows 上没有 grep 会抛 FileNotFoundError）。
+    """
+    try:
+        rx = re.compile(pattern)
+    except re.error:
+        rx = None
+    root = Path(repo_path)
+    hits = []
+    for f in sorted(root.rglob("*.py")):
+        if any(part in _EXCLUDED_DIRS for part in f.parts):
+            continue
+        try:
+            lines = f.read_text(encoding="utf-8", errors="replace").splitlines()
+        except Exception:
+            continue
+        rel = f.relative_to(root)
+        for lineno, line in enumerate(lines, 1):
+            matched = rx.search(line) if rx else pattern in line
+            if matched:
+                hits.append(f"{rel}:{lineno}:{line}")
+    if not hits:
+        return "无匹配"
+    return "\n".join(hits)[:6000]
 
 
 def _edit_file(repo_path, path, old, new):
@@ -52,8 +73,12 @@ def _run_test(repo_path, test_cmd, timeout=60):
         r = subprocess.run(
             test_cmd, shell=True, cwd=repo_path,
             capture_output=True, text=True, timeout=timeout,
+            env=subprocess_env(),
         )
-        return f"returncode={r.returncode}\n{r.stdout[-4000:]}"
+        out = f"returncode={r.returncode}\n{r.stdout[-4000:]}"
+        if r.stderr:
+            out += f"\nSTDERR:\n{r.stderr[-2000:]}"
+        return out
     except subprocess.TimeoutExpired:
         return "测试执行超时"
 

@@ -4,11 +4,13 @@ import subprocess
 import sys
 
 
-def _env_with_scripts():
-    """构造子进程环境：把 Python console scripts 目录（pytest 等）加入 PATH。
+def subprocess_env():
+    """返回补上 Python console scripts 目录（pytest 等）的子进程环境。
 
     Windows 商店版 Python 等安装方式下，pip 安装的命令行工具（pytest.exe）
     所在目录往往不在系统 PATH 里，直接 shell=True 跑 `pytest` 会报找不到命令。
+    这里把 `sys.executable` 所在目录和用户 Scripts 目录补进 PATH，跨平台安全
+    （不存在的目录会被 isdir 过滤掉）。
     """
     env = dict(os.environ)
     dirs = [os.path.dirname(sys.executable)]
@@ -33,7 +35,7 @@ def run_test(repo_path, test_cmd, timeout=60):
             capture_output=True,
             text=True,
             timeout=timeout,
-            env=_env_with_scripts(),
+            env=subprocess_env(),
         )
         return {
             "returncode": result.returncode,
@@ -52,4 +54,5 @@ def reset_repo(repo_path):
         cwd=repo_path,
         capture_output=True,
         text=True,
+        env=subprocess_env(),
     )
