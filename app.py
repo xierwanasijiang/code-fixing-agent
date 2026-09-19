@@ -3,6 +3,7 @@
 运行：双击「启动界面.bat」，或 `python -m streamlit run app.py`
 """
 import html
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -14,6 +15,7 @@ import streamlit as st
 
 from code_agent.llm import LLMClient
 from code_agent.loop import run_agent
+from code_agent.snippet import fix_snippet
 
 st.set_page_config(page_title="代码修复 Agent", page_icon="🤖", layout="wide")
 
@@ -32,7 +34,7 @@ html, body, [class*="css"]{ font-family:'Inter',-apple-system,sans-serif; color:
 h1,h2,h3,h4{ font-family:'Space Grotesk',sans-serif; letter-spacing:-0.02em; }
 code,kbd,pre{ font-family:'JetBrains Mono',monospace; }
 
-.block-container{ padding-top:2.4rem; padding-bottom:3rem; max-width:1060px; }
+.block-container{ padding-top:2.4rem; padding-bottom:3rem; max-width:1080px; }
 
 .hero{ border-bottom:1px solid var(--line); padding-bottom:1.1rem; margin-bottom:1.1rem; }
 .hero .kicker{ font-family:'JetBrains Mono',monospace; font-size:.72rem; letter-spacing:.14em; text-transform:uppercase; color:var(--accent); font-weight:700; }
@@ -62,6 +64,9 @@ code,kbd,pre{ font-family:'JetBrains Mono',monospace; }
 
 .stTabs [data-baseweb="tab"]{ font-family:'Space Grotesk',sans-serif; font-weight:600; }
 [data-testid="stMetric"]{ background:#fff; border:1px solid var(--line); border-radius:10px; padding:1rem; }
+
+.tokbar{ background:#fff; border:1px solid var(--line); border-radius:10px; padding:.8rem 1rem; margin-top:1rem; display:flex; gap:2rem; align-items:center; font-family:'JetBrains Mono',monospace; font-size:.85rem; }
+.tokbar b{ color:var(--accent); }
 </style>
 """,
     unsafe_allow_html=True,
@@ -73,6 +78,7 @@ TOOL_CN = {
 }
 
 
+# ================= 工具函数 =================
 def _reset(repo: str):
     subprocess.run(
         f"git checkout -- {repo}", shell=True, cwd=ROOT,
@@ -87,8 +93,27 @@ def _run(repo: str, test_cmd: str):
     return run_agent(llm, env, {"test_command": test_cmd})
 
 
+def _render_tokens(tokens: dict):
+    """显示 token 用量 + 粗略花费。"""
+    if not tokens or not tokens.get("total"):
+        return
+    prompt = tokens.get("prompt", 0)
+    completion = tokens.get("completion", 0)
+    total = tokens.get("total", 0)
+    cost = prompt / 1e6 * 2 + completion / 1e6 * 8  # 粗略：输入¥2/百万、输出¥8/百万
+    st.markdown(
+        f'<div class="tokbar">'
+        f'<span>输入 <b>{prompt:,}</b></span>'
+        f'<span>输出 <b>{completion:,}</b></span>'
+        f'<span>总计 <b>{total:,}</b> tokens</span>'
+        f'<span>≈ ¥{cost:.4f}</span>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+    st.caption("花费按 deepseek-chat 输入 ¥2/百万、输出 ¥8/百万 粗略估算，以官网为准。")
+
+
 def _render_trace(out: dict):
-    """决策日志：把 agent 每一步渲染成带行号、带状态色的终端命令。"""
     for entry in out["trace"]:
         if entry["type"] == "tool":
             name = entry["name"]
@@ -121,6 +146,17 @@ def _render_trace(out: dict):
             )
 
 
+def _render_before_after(before: str, after: str):
+    """并排显示修复前 vs 修复后。"""
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown("**❌ 修复前**")
+        st.code(before, language="python")
+    with c2:
+        st.markdown("**✅ 修复后**")
+        st.code(after, language="python")
+
+
 # ================= 头部 =================
 st.markdown(
     """
@@ -146,8 +182,38 @@ st.markdown(
 )
 
 # ================= 标签页 =================
-tab_demo, tab_eval = st.tabs(["🔧 单个修复演示", "📊 一键评测"])
+tab_paste, tab_demo, tab_eval = st.tabs(["📝 粘贴修复", "🔧 单个修复演示", "📊 一键评测"])
 
+# ---------- 粘贴修复 ----------
+with tab_paste:
+    st.markdown("**粘贴你报错的代码，让 agent 找出 bug 并修复。**")
+    st.markdown("不需要知道哪里错了——把代码和报错信息贴进来即可。")
+    code_in = st.text_area(
+        "你的代码", height=200,
+        placeholder="def divide(a, b):\n    return a / b",
+    )
+    err_in = st.text_area(
+        "报错信息 / 期望行为", height=100,
+        placeholder="ZeroDivisionError: division by zero\n（或：除数为 0 时应该返回 None）",
+    )
+    if st.button("🔍 找出 bug 并修复", type="primary"):
+        if not code_in.strip():
+            st.warning("请先粘贴你的代码。")
+        else:
+            try:
+                with st.spinner("正在分析代码并定位 bug..."):
+                    llm = LLMClient()
+                    res = fix_snippet(llm, code_in, err_in or "（未提供报错信息，请根据代码语义判断）")
+                # bug 说明（去掉代码块后的文字）
+                explain = re.sub(r"```.*?```", "", res["answer"], flags=re.DOTALL).strip()
+                if explain:
+                    st.info(explain)
+                _render_before_after(code_in, res["fixed_code"])
+                _render_tokens(res["tokens"])
+            except Exception as e:
+                st.error(f"运行出错：{e}")
+
+# ---------- 单个修复演示 ----------
 with tab_demo:
     st.markdown("**让 agent 自己修好 `benchmark/demo` 里的 bug。**")
     st.markdown("测试期望 `divide(1, 0)` 返回 `None`，但当前代码会抛 `ZeroDivisionError`。点按钮，看它一步步定位并修复。")
@@ -155,16 +221,17 @@ with tab_demo:
         try:
             out = _run("benchmark/demo", "pytest test_calc.py -q")
             _render_trace(out)
-            diff = subprocess.run(
-                "git diff -- benchmark/demo/calc.py", shell=True, cwd=ROOT,
+            before = subprocess.run(
+                "git show HEAD:benchmark/demo/calc.py", shell=True, cwd=ROOT,
                 capture_output=True, text=True, encoding="utf-8", errors="replace",
             ).stdout
-            if diff:
-                st.markdown("**改动的代码（diff）**")
-                st.code(diff, language="diff")
+            after = (ROOT / "benchmark" / "demo" / "calc.py").read_text(encoding="utf-8")
+            _render_before_after(before, after)
+            _render_tokens(out["tokens"])
         except Exception as e:
             st.error(f"运行出错：{e}")
 
+# ---------- 一键评测 ----------
 with tab_eval:
     st.markdown("**在 3 个不同的小 bug 上跑评测，统计修复成功率。**")
     st.markdown("每个都是独立小仓库：字符串反转、空列表求平均、大写元音计数。")
@@ -175,12 +242,15 @@ with tab_eval:
     ]
     if st.button("📊 开始评测", type="primary"):
         results = []
+        total_tokens = {"prompt": 0, "completion": 0, "total": 0}
         progress = st.progress(0, text="评测中...")
         for i, inst in enumerate(instances):
             st.markdown(f"**正在评测：{inst['id']}**")
             try:
                 out = _run(inst["repo"], inst["test"])
                 results.append({"任务": inst["id"], "结果": "✅ 修复" if out["success"] else "❌ 未修复", "步数": out["steps"]})
+                for k in total_tokens:
+                    total_tokens[k] += out["tokens"].get(k, 0)
             except Exception as e:
                 results.append({"任务": inst["id"], "结果": "❌ 异常", "步数": "-"})
             progress.progress((i + 1) / len(instances), text=f"已完成 {i + 1}/{len(instances)}")
@@ -189,3 +259,4 @@ with tab_eval:
         resolved = sum(1 for r in results if "✅" in r["结果"])
         total = len(results)
         st.metric("修复成功率", f"{resolved}/{total} = {resolved / total * 100:.0f}%")
+        _render_tokens(total_tokens)

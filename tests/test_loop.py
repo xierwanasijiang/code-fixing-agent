@@ -103,3 +103,30 @@ def test_loop_collects_trace(tmp_path):
     assert tool_steps[2]["name"] == "run_test"
     assert len(final_steps) == 1
     assert final_steps[0]["success"] is True
+
+
+def test_loop_accumulates_tokens(tmp_path):
+    """run_agent 应累加每次调用的 token 用量（供 UI 显示花费）。"""
+    (tmp_path / "m.py").write_text("def f():\n    return 1\n")
+    (tmp_path / "test_m.py").write_text(
+        "from m import f\n\n\ndef test_f():\n    assert f() == 2\n"
+    )
+
+    def with_usage(resp, pt, ct):
+        resp.usage = type("U", (), {
+            "prompt_tokens": pt, "completion_tokens": ct,
+            "total_tokens": pt + ct,
+        })()
+        return resp
+
+    llm = FakeLLM([
+        with_usage(_resp_tool("read_file", {"path": "m.py"}), 100, 10),
+        with_usage(_resp_tool("edit_file", {"path": "m.py", "old": "return 1", "new": "return 2"}), 200, 20),
+        with_usage(_resp_tool("run_test", {"test_cmd": "pytest test_m.py -q"}), 300, 30),
+        with_usage(_resp_text("已修复"), 400, 40),
+    ])
+    out = run_agent(llm, {"repo_path": str(tmp_path)},
+                    {"test_command": "pytest test_m.py -q"})
+    assert out["tokens"]["prompt"] == 100 + 200 + 300 + 400
+    assert out["tokens"]["completion"] == 10 + 20 + 30 + 40
+    assert out["tokens"]["total"] == 1100

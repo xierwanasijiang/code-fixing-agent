@@ -5,13 +5,24 @@ from .prompts import SYSTEM_PROMPT, build_task
 from .tools import TOOL_SCHEMAS, execute_tool
 
 
+def _add_usage(tokens, response):
+    """从 OpenAI 兼容响应里累加 token 用量。"""
+    usage = getattr(response, "usage", None)
+    if usage:
+        tokens["prompt"] += getattr(usage, "prompt_tokens", 0) or 0
+        tokens["completion"] += getattr(usage, "completion_tokens", 0) or 0
+        tokens["total"] += getattr(usage, "total_tokens", 0) or 0
+
+
 def run_agent(llm, env, instance, max_steps=15):
     ctx = Context(SYSTEM_PROMPT, build_task(instance, env.get("repo_path")))
     trace = []
+    tokens = {"prompt": 0, "completion": 0, "total": 0}
     steps = 0
     while steps < max_steps:
         steps += 1
         response = llm.chat(ctx.messages, tools=TOOL_SCHEMAS)
+        _add_usage(tokens, response)
         parsed = parse_response(response)
 
         if "content" in parsed:  # 模型给出最终答案
@@ -23,7 +34,8 @@ def run_agent(llm, env, instance, max_steps=15):
             trace.append({"type": "final", "step": steps, "answer": answer,
                           "success": success, "verification": test_out})
             return {"success": success, "steps": steps,
-                    "messages": ctx.messages, "answer": answer, "trace": trace}
+                    "messages": ctx.messages, "answer": answer,
+                    "trace": trace, "tokens": tokens}
 
         # 按 OpenAI 工具调用协议回传：assistant.tool_calls + role:"tool"
         ctx.add_assistant_tool_call(parsed["tool_calls"])
@@ -39,4 +51,5 @@ def run_agent(llm, env, instance, max_steps=15):
     trace.append({"type": "final", "step": steps, "answer": "达到最大步数上限",
                   "success": False, "verification": ""})
     return {"success": False, "steps": steps,
-            "messages": ctx.messages, "answer": "达到最大步数上限", "trace": trace}
+            "messages": ctx.messages, "answer": "达到最大步数上限",
+            "trace": trace, "tokens": tokens}
