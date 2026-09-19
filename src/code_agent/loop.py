@@ -1,7 +1,7 @@
-"""ReAct 循环：LLM 决策 → 调工具 → 观察 → 再决策。"""
+"""ReAct 循环：思考 → 行动 → 观察，LLM 决策 → 调工具 → 观察 → 再决策。"""
 from .context import Context
 from .llm import parse_response
-from .prompts import SYSTEM_PROMPT, build_task
+from .prompts import SYSTEM_PROMPT, THOUGHT_PROMPT, build_task
 from .tools import TOOL_SCHEMAS, execute_tool
 
 
@@ -21,9 +21,19 @@ def run_agent(llm, env, instance, max_steps=15):
     steps = 0
     while steps < max_steps:
         steps += 1
-        response = llm.chat(ctx.messages, tools=TOOL_SCHEMAS)
-        _add_usage(tokens, response)
-        parsed = parse_response(response)
+
+        # 1. 思考（观察 + 决策），不带工具，让模型先说推理
+        ctx.add_user(THOUGHT_PROMPT)
+        thought_resp = llm.chat(ctx.messages, tools=None)
+        _add_usage(tokens, thought_resp)
+        thought = parse_response(thought_resp).get("content") or ""
+        ctx.add_assistant_text(thought)
+        trace.append({"type": "thought", "step": steps, "content": thought})
+
+        # 2. 行动：调用工具，或给出最终答案
+        action_resp = llm.chat(ctx.messages, tools=TOOL_SCHEMAS)
+        _add_usage(tokens, action_resp)
+        parsed = parse_response(action_resp)
 
         if "content" in parsed:  # 模型给出最终答案
             answer = parsed["content"] or ""
@@ -37,7 +47,7 @@ def run_agent(llm, env, instance, max_steps=15):
                     "messages": ctx.messages, "answer": answer,
                     "trace": trace, "tokens": tokens}
 
-        # 按 OpenAI 工具调用协议回传：assistant.tool_calls + role:"tool"
+        # 3. 执行工具并观察结果
         ctx.add_assistant_tool_call(parsed["tool_calls"])
         for tc in parsed["tool_calls"]:
             try:

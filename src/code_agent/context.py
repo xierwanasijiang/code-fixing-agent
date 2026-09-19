@@ -15,6 +15,14 @@ class Context:
     def messages(self):
         return self._messages
 
+    def add_user(self, text):
+        """追加一条用户消息（如引导思考的提问）。"""
+        self._messages.append({"role": "user", "content": text})
+
+    def add_assistant_text(self, text):
+        """追加一条助手纯文本消息（如思考内容）。"""
+        self._messages.append({"role": "assistant", "content": text})
+
     def add_assistant_tool_call(self, tool_calls):
         """追加模型发起的工具调用（assistant 角色 + tool_calls）。"""
         self._messages.append({

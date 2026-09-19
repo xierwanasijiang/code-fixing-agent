@@ -9,6 +9,7 @@ import sys
 
 from .context import Context
 from .llm import parse_response
+from .prompts import THOUGHT_PROMPT
 
 
 def extract_code_block(text):
@@ -65,9 +66,9 @@ SNIPPET_TOOL_SCHEMA = [{
 
 SNIPPET_SYSTEM_PROMPT = (
     "你是代码修复专家。给定一段报错的 Python 代码，你要反复迭代直到修复成功：\n"
-    "1. 分析 bug 原因；\n"
-    "2. 用 run_snippet 工具运行你修复后的【完整代码】来验证；\n"
-    "3. 若仍报错，根据报错继续修改，再运行，直到 returncode=0。\n"
+    "1. 思考：分析 bug 原因、决定下一步怎么做；\n"
+    "2. 行动：用 run_snippet 工具运行你修复后的【完整代码】来验证；\n"
+    "3. 观察：查看运行结果，若仍报错就继续修改。\n"
     "注意：每次 run_snippet 都要传【完整代码】，不要省略。最后用一句话总结你改了什么。"
 )
 
@@ -88,11 +89,23 @@ def run_snippet_agent(llm, code, error, max_steps=8):
 
     while steps < max_steps:
         steps += 1
-        response = llm.chat(ctx.messages, tools=SNIPPET_TOOL_SCHEMA)
-        u = _usage_of(response)
+
+        # 1. 思考
+        ctx.add_user(THOUGHT_PROMPT)
+        thought_resp = llm.chat(ctx.messages, tools=None)
+        u = _usage_of(thought_resp)
         for k in tokens:
             tokens[k] += u[k]
-        parsed = parse_response(response)
+        thought = parse_response(thought_resp).get("content") or ""
+        ctx.add_assistant_text(thought)
+        trace.append({"type": "thought", "step": steps, "content": thought})
+
+        # 2. 行动
+        action_resp = llm.chat(ctx.messages, tools=SNIPPET_TOOL_SCHEMA)
+        u = _usage_of(action_resp)
+        for k in tokens:
+            tokens[k] += u[k]
+        parsed = parse_response(action_resp)
 
         if "content" in parsed:  # 模型给出最终总结
             answer = parsed["content"] or ""
@@ -107,6 +120,7 @@ def run_snippet_agent(llm, code, error, max_steps=8):
             return {"answer": answer, "fixed_code": fixed,
                     "trace": trace, "tokens": tokens, "success": last_run_ok}
 
+        # 3. 执行工具
         ctx.add_assistant_tool_call(parsed["tool_calls"])
         for tc in parsed["tool_calls"]:
             if tc["name"] == "run_snippet":

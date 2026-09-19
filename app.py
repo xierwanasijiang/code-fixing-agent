@@ -47,6 +47,7 @@ code,kbd,pre{ font-family:'JetBrains Mono',monospace; }
 
 .step{ display:flex; gap:.95rem; border-left:3px solid var(--line); padding:.45rem 0 .45rem 1rem; margin-bottom:.85rem; }
 .step.tool{ border-left-color:var(--accent); }
+.step.thought{ border-left-color:var(--warn); }
 .step.ok{ border-left-color:var(--ok); }
 .step.err{ border-left-color:var(--err); }
 .step .gutter{ font-family:'JetBrains Mono',monospace; color:var(--muted); font-size:.8rem; padding-top:.14rem; min-width:1.5rem; }
@@ -123,7 +124,16 @@ def _render_tokens(tokens: dict):
 
 def _render_trace(out: dict):
     for entry in out["trace"]:
-        if entry["type"] == "tool":
+        if entry["type"] == "thought":
+            thought = html.escape(str(entry.get("content", ""))[:800])
+            st.markdown(
+                f'<div class="step thought">'
+                f'<div class="gutter">{entry["step"]:02d}</div>'
+                f'<div class="body"><div class="prompt">💭 思考</div>'
+                f'<div class="detail">{thought}</div></div></div>',
+                unsafe_allow_html=True,
+            )
+        elif entry["type"] == "tool":
             name = entry["name"]
             args = html.escape(str(entry["arguments"])[:160])
             result = html.escape(str(entry["result"])[:900])
